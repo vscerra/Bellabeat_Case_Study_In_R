@@ -1,0 +1,374 @@
+---
+title: "Bellabeat Case Study, Analysis in R"
+author: "Veronica Scerra"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document: 
+    toc: true # table of content true
+    toc_depth: 3  # up to three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# The Bellabeat company
+Bellabeat is a high-tech company looking to coalesce beautiful design and intuitive technology into products to help women optimize their health and wellness. By integrating the use of Bellabeat's smart devices, app, and membership community into their daily lives, women can leverage data collected about their activity, sleep, stress level, and more to make choices for better living. 
+
+# Analysis Goals
+The aim of the current analysis is to use activity data collected from a sampling of users on a sampling of days to identify the following:
+
+* Any useful trends in smart device usage
+* How trends in usage can help Bellabeat customers
+* How trends in usage could influence the Bellabeat marketing strategy
+
+# Data preparation
+## Data set used
+The data used for this analysis was collected from FitBit fitness trackers. 
+
+## Data accessibility and privacy
+The publicly available pre-processed data is made available through Mobius, and can be found on Kaggle using this [link](https://www.kaggle.com/arashnic/fitbit). As the data has been made openly available, anyone can download, modify, distribute and analyze the data without explicit permission. 
+
+## Data set organization
+The data set consists of 18 comma separated variable files containing the information detailed in a table available [here](https://docs.google.com/spreadsheets/d/1YYlwgaXqSLjVr5WxtH7F2X8AlkfEQIrH57z50WTcU9w/edit?usp=sharing)
+
+The data was collected from 33 users over 31 days. I restricted analysis to the data contained in dailyActivity_merged.csv, sleepDay_merged.csv, and hourly{Calories,Intensities, Steps}_merged.csv. Although weight data and heart rate data might have allowed greater insight, the number of contributors to the data sets (8 and 14, respectively) made them too sparse to be useful in this instance. 
+
+## Data credibility and integrity
+We have no available data on the demographics of the contributing users whose data is available in this set, so sampling bias can not be determined. What is evident, however, is that contributors are people who can afford smart devices, choose to use them regularly, and are willing to have their data collected and used for analytical insights. 
+
+# Data processing
+## Tools used 
+For this analysis I chose to use the R language (RStudio platform) due to the size of the data set, visualization options in R and the free accessibility of the R language and platforms. 
+
+## Loading libraries and importing data
+
+```{r loading libraries and importing data}
+library(tidyverse)
+library(lubridate)
+
+daily_activity <- read.csv("dailyActivity_merged.csv")
+sleep_day <- read.csv("sleepDay_merged.csv")
+hour_cal <- read.csv("hourlyCalories_merged.csv")
+hour_step <- read.csv("hourlySteps_merged.csv")
+hour_intensity <- read.csv("hourlyIntensities_merged.csv")
+```
+
+## Data merging and formatting
+
+Data collected on an hourly level {hourlySteps, hourlyCalories, hourIntensities} were merged into one data frame for hourly data. Additionally, date and time data was standardized across data frames. 
+
+Data from days where no steps were taken were excluded from the analysis, as well as any duplicate records. 
+
+``` {r merge hourly data and reformat times/dates }
+hourly <- data.frame(hour_step, Calories = hour_cal$Calories, Intensity = hour_intensity$TotalIntensity, AvgIntensity =hour_intensity$AverageIntensity)
+daily_activity <- filter(daily_activity, TotalSteps > 0)
+
+#strip and reformat the %Day columns for uniformity
+daily_activity$ActivityDate <- as.Date(mdy(daily_activity$ActivityDate))
+sleep_day$SleepDay <-as.Date(mdy_hms(sleep_day$SleepDay))
+hourly$time = as.POSIXct(hourly$ActivityHour, format ="%m/%d/%Y %I:%M:%S %p" , tz=Sys.timezone())
+hourly$ActivityHour = substr(hourly$time,11,22)
+hourly$ActivityDay <- substr(hourly$time, 1, 10)
+```
+
+```{r eliminate duplicate records}
+sleep_day <- sleep_day %>%
+  distinct() %>%
+  drop_na()
+daily_activity <- daily_activity %>%
+  distinct() %>%
+  drop_na()
+hourly <- hourly %>%
+  distinct() %>%
+  drop_na()
+
+```
+
+
+The data set contains data from 33 participants across 31 different days, so a new identifier variable (ID) was created by merging the user Id and date, then this ID variable was used to join the sleep and activity data
+```{r add ID variable to data frames}
+numberParticipants <- n_distinct(daily_activity$Id)
+numberParticipants
+numberDay <- n_distinct(daily_activity$ActivityDate)
+numberDay
+
+#Create a new ID and Date column to index dataframes
+daily_activity$ID <- paste(daily_activity$Id, daily_activity$ActivityDate)
+sleep_day$ID <- paste(sleep_day$Id, sleep_day$SleepDay)
+hourly$ID <- paste(hourly$Id, hourly$ActivityDay)
+
+```
+## Data summary and preview
+
+Now the data set contains three data frames: 
+
+* daily_activity tracks aggregate activity on a daily basis
+```{r daily_activity data frame}
+summary(daily_activity)
+```
+
+* activity_sleep is the selection of daily_activity records for which there exists sleep information from the sleep_day data set
+```{r sleep_day data frame}
+summary(sleep_day)
+```
+
+* hourly is the data collected from participants on an hourly basis (rather than daily aggregate data)
+```{r hourly data frame}
+summary(hourly)
+```
+
+# Data Analysis
+
+## Distibution of caloric expenditure
+
+To get an idea of the caloric expenditure of users in the data set a histogram of daily caloric expenditure was constructed from the daily_activity data frame.
+
+```{r daily calorie histogram full, echo = FALSE} 
+ggplot(daily_activity, aes(x=Calories)) +
+  geom_histogram(binwidth = 50, position="Identity",color = "white", fill = "black") +
+  labs(title = "Distibution of Daily Calories Burned", x = "Calories", y = "Count")
+```
+
+Broadly, the aim of many users of health tracking devices is to burn more calories and improve fitness. To drill down a little deeper on the differential characteristics of those records with the greatest caloric expenditure, the data set was segregated into three groups, the lowest 10% of calorie burning users/days, the highest 10% of calorie burning users/days, and the middle 80% to look for differences and similarities between groups. 
+
+```{r daily calorie histogram - by category, echo = FALSE}
+pal1 <- c("#0570B0", "#74A9CF", "#999999" )
+a <- as.numeric(quantile(daily_activity$Calories, prob = c(.10, .90))[2])
+ b <- as.numeric(quantile(daily_activity$Calories, prob = c(.10, .90))[1])
+daily_activity <- data.frame(daily_activity, Category = 0)
+hourly <- data.frame(hourly, Category = 0)
+ a <- as.numeric(quantile(daily_activity$Calories, prob = c(.10, .90))[2])
+ b <- as.numeric(quantile(daily_activity$Calories, prob = c(.10, .90))[1])
+
+for (i in 1:nrow(daily_activity)) {
+   if (daily_activity$Calories[i] >= a) {
+     daily_activity$Category[i]<- "High"
+   } else if (daily_activity$Calories[i] <= b) {
+     daily_activity$Category[i] <- "Low"
+   } else {
+     daily_activity$Category[i] <- "Intermediate"
+   }}
+
+ 
+
+for (i in 1:nrow(hourly)) {
+  x <- which(daily_activity$ID == hourly$ID[i])
+  if (length(x)!=0) {
+    hourly$Category[i] <- daily_activity$Category[x]
+  }
+}
+hourly <- filter(hourly, Category != 0)
+
+ ggplot(data = daily_activity, aes(x=Calories, fill=Category)) +
+  geom_histogram(binwidth = 50, position="Identity",color = "white") +
+  scale_fill_manual(values=pal1)+
+  geom_vline(aes(xintercept=a),color=pal1[1], linetype="dashed", size=1) + 
+  geom_vline(aes(xintercept=b),color=pal1[3], linetype="dashed", size=1) +
+  annotate(geom="text", x=4000, y=30, label="Top 10%", color=pal1[1], size = 6) +
+  annotate(geom="text", x=750, y=30, label="Bottom 10%", color=pal1[3], size = 6) + 
+  labs(title = "Distibution of Daily Calories Burned", x = "Calories", 
+       y = "Count", fill = "Calorie burner category")
+
+
+```
+
+## Relationship between sleep and caloric expenditure
+
+One aspect of health that is relevant for all user groups is sleep. How does caloric expenditure vary with the amount of sleep a user gets, and does the relationship interact with the category of calorie burner (High, Intermediate, Low)? A scatterplot generated from the activity_sleep data frame visualizes this relationship. 
+
+```{r calorie sleep scatterplot, echo = FALSE}
+#Inner join daily_activity with sleep on the new ID (Id+date) column
+activity_sleep <- inner_join(daily_activity, sleep_day, by = "ID")
+#activity_sleep <- subset(activity_sleep, select = -Id.y)
+
+activity_sleep %>% 
+  ggplot(aes(x = (TotalMinutesAsleep/60), y = Calories, color = Category, shape = Category)) + 
+  geom_point() + 
+  scale_colour_manual(values = pal1)+ 
+  geom_smooth(method = "lm", formula = y~x, se = TRUE) + 
+  labs(title = "Relationship between sleep and calories burned", x = "hours of sleep", y = "calories burned", color = "Calorie burner category") 
+
+#Look at time of usage across groups
+activity_sleep$Usage <- rowSums(activity_sleep[, c("VeryActiveMinutes", "FairlyActiveMinutes", "LightlyActiveMinutes", "SedentaryMinutes", "TotalMinutesAsleep")])
+activity_sleep$UsageH <- activity_sleep$Usage/60
+
+
+```
+
+As might be expected, most users got between 5 and 10 hours of sleep, but there were no differences in the distribution between calorie burner categories. The High, Intermediate, and Low burner groups had no linear relationships between hours of sleep and calories burned (F(1,53) = 1.88, *p* = 0.176, F(1,315) = 0.31, *p* = 0.577, F(1,39) = 0.85, *p* = 0.362, respectively). 
+
+That is to say, the top 10% of calorie burners had the same relationship between calorie expenditure and sleep as the lowest 10% of calorie burners. 
+
+## Relationship between exercise intensity and caloric expenditure
+
+The data aggregated in daily_activity contains information relating to the number of minutes spent on activity intensity {Very, Fairly, Lightly}. One question for those interested in maximizing their caloric expenditure is how the intensity of their daily activity affects overall caloric expenditure. 
+
+The first level of this analysis was determining if High, Intermediate, and Low calorie burners had different relationships with exercise intensity.
+
+```{r intensity donut plots, echo = FALSE}
+pal2 <- c("#990066", "#FF99CC", "lavender" )
+
+
+daily_summary <- daily_activity %>%
+  group_by(Category) %>%
+  summarise(VeryActive = mean(VeryActiveMinutes), FairlyActive = mean(FairlyActiveMinutes),
+            LightlyActive = mean(LightlyActiveMinutes), VAsd = sd(VeryActiveMinutes, na.rm = TRUE), 
+            FAsd = sd(FairlyActiveMinutes, na.rm = TRUE), LAsd = sd(LightlyActiveMinutes, na.rm = TRUE))
+
+#Intensity proportions segregated by calorie category - from daily data
+Activity <- c("Very","Fairly", "Lightly")
+A1 <- as.numeric(daily_summary[1,2:4])
+A2 <- as.numeric(daily_summary[2,2:4])
+A3 <- as.numeric(daily_summary[3,2:4])
+df1 <- data.frame(Activity,A1)
+df2 <- data.frame(Activity,A2)
+df3 <- data.frame(Activity,A3)
+hsize <- 1.0
+
+#Add hsize
+df1 <- data.frame(df1, x = hsize)
+df2 <- data.frame(df2, x = hsize)
+df3 <- data.frame(df3, x = hsize)
+
+#set order
+df1$Activity <- factor(df1$Activity, levels = df1$Activity)
+df2$Activity <- factor(df2$Activity, levels = df2$Activity)
+df3$Activity <- factor(df3$Activity, levels = df3$Activity)
+
+# Make the plot
+ggplot(df3, aes(x = hsize, y = (A3/(sum(A3))*100), fill = Activity)) + 
+  geom_col(color = "black") + 
+  geom_text(aes(label = round((A3/sum(A3))*100)), position = position_stack(vjust = 0.5)) + 
+  coord_polar(theta = "y") + 
+  scale_fill_manual(values = pal2) +
+  xlim(c(0.2, hsize + .5))+ 
+  labs(title = "Low calorie burners", y = "% of active minutes in each level of activity", x = "")+
+  guides(fill = guide_legend(title = "Active level")) +
+  theme(panel.background = element_rect(fill = "white"),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+ 
+ggplot(df2, aes(x = hsize, y = (A2/(sum(A2))*100), fill = Activity)) + 
+  geom_col(color = "black") + 
+  geom_text(aes(label = round((A2/sum(A2))*100)), position = position_stack(vjust = 0.5)) + 
+  coord_polar(theta = "y") + 
+  scale_fill_manual(values = pal2) +
+  xlim(c(0.2, hsize + .5))+ 
+  labs(title = "Intermediate calorie burners", y = "% of active minutes in each level of activity", x = "")+
+  guides(fill = guide_legend(title = "Active level")) +
+  theme(panel.background = element_rect(fill = "white"),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+
+ggplot(df1, aes(x = hsize, y = (A1/(sum(A1))*100), fill = Activity)) + 
+  geom_col(color = "black") + 
+  geom_text(aes(label = round((A1/sum(A1))*100)), position = position_stack(vjust = 0.5)) + 
+  coord_polar(theta = "y") + 
+  scale_fill_manual(values = pal2) +
+  xlim(c(0.2, hsize + .5))+ 
+  labs(title = "High calorie burners", y = "% of active minutes in each level of activity", x = "")+
+  guides(fill = guide_legend(title = "Active level")) +
+  theme(panel.background = element_rect(fill = "white"),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank())
+```
+ 
+The above plots illustrate that as one moves up from Low to Intermediate to High calorie burners, the users are spending more time in Fairly and Very Active intensity exercise and less time in Lightly Active intensity exercise.
+ 
+The daily data is discretized into three intensity levels on a daily basis. The hourly data set, however, has exercise intensity values collected continuously. Consequently the next step was to look at the continuous relationship between exercise intensity and caloric expenditure (as collected for every hour of the day). 
+
+```{r hourly intensity scatterplot, echo = FALSE}
+ggplot(data = hourly, aes(x = Intensity, y = Calories, color = Category)) + 
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~x, se = TRUE, color = "black", linetype = "dashed") +
+  scale_color_manual(values = pal1) +
+  labs(title = "Calorie expenditure as a function of movement intensity", x = "exercise intensity", 
+       y = "Calories burned", color = "Calorie burner category")
+
+```
+
+Across all groups, increased Intensity of exercise was highly predictive of caloric expenditure (R^2^ = .806, F(1,20413) = 8.49E4, *p* < .001)
+
+## Relationship between steps taken and caloric expenditure
+
+Similar to exercise intensity, there was a positive linear relationship between steps taken and caloric expenditure, on both a daily and hourly basis. The hourly data is plotted below. 
+
+```{r hourly steps scatterplot, echo = FALSE}
+hourly2 <- filter(hourly, StepTotal>0)
+ggplot(data = hourly2, aes(x = StepTotal, y = Calories, color = Category)) + 
+  geom_smooth(method = "lm", formula = y~x, se = TRUE, color = "black", linetype = "dashed") +
+  geom_point() +
+  scale_color_manual(values = pal1) +
+  labs(title = "Calorie expenditure as a function of steps taken", x = "Steps", 
+       y = "Calories burned", color = "Calorie burner category")
+
+```
+
+Across all groups, number of steps was predictive of caloric expenditure (R^2^ = .664, F(1,20413) = 4.04E4, *p* < .001), although not quite as predictive as intensity of exercise (R^2^ of .664 vs. .806).
+
+## Relationship between hour of the day and caloric expenditure
+
+While the question of best time of day for exercise is still debated in the physiology literature, and the answer varies according to fitness goals among other factors, there were no glaring differences between the calorie burner groups in the data sample provided. Burning more calories overall was not related to targeted caloric expenditure during any particular time frame. That is, burning more calories in the day didn't mean exercising in the morning, or exercising in the evening, but rather staying consistently more active throughout the day. 
+
+```{r time of day distributions, echo = FALSE}
+options(dplyr.summarise.inform = FALSE)
+hour_summary <- hourly %>% 
+  group_by(ActivityHour,Category)%>% 
+  summarise(meanSteps = mean(StepTotal), meanCal = mean(Calories), meanIntensity = mean(Intensity))
+
+ggplot(data = hour_summary, aes(x = ActivityHour, y = meanCal, fill = Category)) + 
+  geom_bar(stat = "identity")+
+  scale_fill_manual(values = pal1) + 
+  labs(title = "Calorie expenditure per hour of the day", x = "Hour [24 hour scale]", 
+       y = "Calories/hour [mean]", fill = "Calorie burner category") +
+  theme(axis.text.x = element_text(angle = 30))
+
+
+```
+## Usage of smart device 
+As one last check on the usage of the FitBit device, I looked at an aggregate of time used by summing active minutes (of all levels), sedentary minutes, and sleep minutes for all users with sleep data available. The data indicate that for those users who made sleep data available, 97% of daily data reported >20 hours of usage, and those statistics did not differ between High, Intermediate, and Low calorie burners.
+
+```{r Histogram of usage}
+ggplot(data = activity_sleep, aes(x = UsageH, fill = Category)) + 
+  geom_histogram(binwidth = 1, position = "Dodge", color = "white") + 
+  scale_fill_manual(values = pal1)+
+  labs(title = "Distribution of smart device usage", x = "Usage [hours/day]", y = "Count",fill = "Calorie burner category")
+```
+
+# Recommendations for users
+
+For users of the Bellabeat smart devices the recommendations based on the findings of this analysis are fairly simple. More steps taken, and higher intensity of exercise mean more calories burned in a day. In the simplicity of this advice, there are reasons for optimism for those looking to make healthy choices.
+
+* First, sleep was uncorrelated with caloric expenditure, so even if one doesn't get the best night's sleep, or if one oversleeps, there's no reason to expect that to impact calorie burning. That being said, even though individual sleep needs vary, adequate sleep is imperative for good mental and physical health. One option would be to set sleep timers and alarms to help keep users on track with their sleep needs.
+
+* Second, those who burned more calories in the sample set of users were those who spent more of their active minutes in Fairly and Very intense activity rather than Low intensity activity. Furthermore, the intensity of user activity was more strongly predictive of calorie expenditure than steps taken, though both were positively correlated with caloric output. So those looking to burn more calories can include just a few extra minutes of increased activity exercise to make a difference. 
+
+* Third, there were no trends suggesting that the highest calorie burners were more active in a specific epoch of the day, meaning that if one doesn't have time to exercise in the morning, exercise in the afternoon or evening is just as beneficial overall. The top 10% of calorie burners in the sample data were simply more active throughout the day than those in the remaining 80% of the sample. *Whenever* exercise of moderate intensity or extra steps can be added, they will make a difference in overall health. 
+
+# Recommendations for Bellabeat stakeholders
+
+## More data, and new metrics would increase value 
+
+While the user data aggregated in this set are a good starting point, much more would be helpful in recognizing trends and establishing predictors for health outcomes. Data about user exercise habits (cardio vs. strength training, heart rate variability, weight, goals, etc.) could lead to analyses that are more tailored to a user's lifestyle and needs.
+
+## A shift from descriptive to prescriptive interactions
+
+Smart devices are desirable and valuable to users not because of the data they collect, but for the insights they can deliver. Data should be used in service of the user, and for that to be effective analytics need to focus on the prescriptive rather than the descriptive. Rather than telling the user what they *did*, the goal is to use what they did to help them push forward and choose what *to do*. To that end, the more ways users are encouraged to integrate Bellabeat devices into their daily routines, the more insight and value Bellabeat can add to their progress. 
+
+From the Bellabeat user data provided, intensity of exercise could be a useful prod for users. For example, notifications could be sent to users indicating their proportion of lightly vs. more moderately active exercise and encouraging them to increase the proportion of active movement in their day, even by just a few minutes, as the data suggests that even small increases in activity intensity significantly increase caloric expenditure. 
+
+Further, recent physiology research suggests that different times of day are more useful for addressing fitness goals (i.e., morning exercise being better for fat burning, evening exercise being better for strength training), so depending on users' goals, Bellabeat devices can aid them to direct their efforts at the appropriate time of day and track progress in key metrics. 
+
+Finally, the more users actually engage with the devices, the better predictions and more personalized recommendations they will receive. 
+
+
+
+
